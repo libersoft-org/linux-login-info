@@ -1,0 +1,198 @@
+#!/bin/bash
+
+YELLOW=$'\e[0;33m'
+RED=$'\e[0;31m'
+GREEN=$'\e[0;32m'
+DEFAULT=$'\e[0m'
+
+getBar() {
+ echo -n "["
+ for i in $(seq 5 5 100)
+ do
+  if [ $1 -lt $i ]; then
+   echo -n "-"
+  else
+   echo -n "#"
+  fi
+ done
+ echo -n "] $1%"
+}
+
+getHumanSize() {
+ local SIZE=$1
+ local UNITS="B kB MB GB TB PB EB ZB YB"
+ for F in $UNITS; do
+  local UNIT=$F
+  test ${SIZE%.*} -lt 1024 && break;
+  SIZE=$(echo "$SIZE / 1024" | bc -l)
+ done
+ if [ "$UNIT" = "B" ]; then
+  echo $SIZE $UNIT
+ else
+  echo $(getRound 2 $SIZE) $UNIT
+ fi
+}
+
+getRound() {
+ printf '%.*f\n' $1 $2
+}
+
+getCpuUsage() {
+ top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}'
+}
+
+CPU_INFO=$(lscpu)
+CPU_NAME=$(echo "$CPU_INFO" | grep "Model name" | head -n 1 | awk -F: '{print $2}' | xargs)
+CPU_COUNT=$(echo "$CPU_INFO" | grep 'Socket(s):' | cut -f 2 -d ":" | awk '{$1=$1}1')x
+CPU_CORES=$(echo "$CPU_INFO" | grep 'Core(s) per socket:' | cut -f 2 -d ":" | awk '{$1=$1}1')
+CPU_THREADS=$(echo "$CPU_INFO" | grep 'Thread(s) per core:' | cut -f 2 -d ":" | awk '{$1=$1}1')
+CPU_LOGIC=$(echo "$CPU_INFO" | grep 'CPU(s):' | cut -f 2 -d ":" | awk '{$1=$1}1' | sed 1q)
+
+HOSTNAME=$(hostname)
+OS_VERSION=$(lsb_release -d | cut -f2-)
+KERNEL_VERSION=$(uname -r)
+
+MEM=$(free -b | grep Mem:)
+MEM_TOTAL=$(echo $MEM | awk '{print $2}')
+MEM_USED=$(echo $MEM | awk '{print $3}')
+MEM_PERCENT=$((MEM_USED*100/MEM_TOTAL))
+
+uptime_seconds=$(awk '{print int($1)}' /proc/uptime)
+uptime_days=$((uptime_seconds / 86400))
+uptime_hours=$(printf "%02d" $(( (uptime_seconds % 86400) / 3600 )))
+uptime_minutes=$(printf "%02d" $(( ((uptime_seconds % 86400) % 3600) / 60 )))
+uptime_seconds=$(printf "%02d" $(( ((uptime_seconds % 86400) % 3600) % 60 )))
+
+echo ""
+echo " ${RED}System info${DEFAULT}:"
+echo ""
+echo " ${YELLOW}Hostname${DEFAULT}: ${GREEN}$HOSTNAME${DEFAULT}"
+echo "       ${YELLOW}OS${DEFAULT}: $OS_VERSION"
+echo "   ${YELLOW}Kernel${DEFAULT}: $KERNEL_VERSION"
+echo "   ${YELLOW}Uptime${DEFAULT}: $uptime_days days, $uptime_hours:$uptime_minutes:$uptime_seconds"
+echo ""
+echo " ${RED}System resources${DEFAULT}:"
+echo ""
+echo "       ${YELLOW}CPU${DEFAULT}: $CPU_COUNT $CPU_NAME ($CPU_CORES cores, $CPU_THREADS threads) - $CPU_LOGIC logical CPUs"
+echo -n " ${YELLOW}CPU usage${DEFAULT}: "
+getBar $(getRound 0 $(getCpuUsage))
+echo ""
+echo -n " ${YELLOW}RAM usage${DEFAULT}: "
+getBar $MEM_PERCENT
+echo " ("$(getHumanSize $MEM_USED) / $(getHumanSize $MEM_TOTAL)")"
+
+echo ""
+echo " ${RED}Storage usage${DEFAULT}:"
+echo ""
+
+max_disk_length=0
+disks=$(lsblk -np -o NAME,MOUNTPOINT | grep -E ' /' | sed -e 's/[^/]*\//\//' -e 's/ .*//')
+for disk in $disks; do
+ disk_length=${#disk}
+ if (( disk_length > max_disk_length )); then
+  max_disk_length=$disk_length
+ fi
+done
+
+for disk in $disks; do
+ disk_info=$(df -B1 $disk | tail -1)
+ disk_used=$(echo $disk_info | awk '{print $3}')
+ disk_available=$(echo $disk_info | awk '{print $4}')
+ disk_total=$((disk_used + disk_available))
+ disk_percent=$((disk_used*100/disk_total))
+ formatted_disk=$(printf "%${max_disk_length}s" $disk)
+ printf " ${YELLOW}${formatted_disk}${DEFAULT}: "
+ getBar $disk_percent
+ echo " ($(getHumanSize $disk_used) / $(getHumanSize $disk_total)})"
+done
+
+echo ""
+echo " ${RED}Network interfaces${DEFAULT}:"
+echo ""
+
+max_length=0
+while IFS= read -r line; do
+ iface_length=${#line}
+ if (( iface_length > max_length )); then
+  max_length=$iface_length
+ fi
+done < <(ip -o -4 addr show | grep -v "^1: lo" | awk '{print $2}')
+
+while IFS= read -r line; do
+ iface=$(echo $line | awk '{print $2}')
+ ipaddr=$(echo $line | awk '{print $4}' | cut -d/ -f1)
+ formatted_iface=$(printf "%${max_length}s" $iface)
+ echo " ${YELLOW}${formatted_iface}${DEFAULT}: $ipaddr"
+done < <(ip -o -4 addr show | grep -v "^1: lo")
+
+softwareNames=("kvm" "libvirtd" "docker" "kubectl" "named" "pdns_server" "postfix" "exim" "dovecot" "spamassassin" "rspamd" "clamscan" "opendkim" "nginx" "apache2" "lighttpd" "squid" "php" "node" "npm" "deno" "bun" "java" "dotnet" "python" "perl" "ruby" "sqlite3" "mysql" "psql" "mongod" "redis-server" "proftpd" "smbd" "sshd" "ntpd" "openvpn" "rsync" "borg" "snmpd" "git" "iptables" "ferm")
+formattedSoftwareNames=("KVM-QEMU" "Libvirt" "Docker" "Kubernetes" "BIND" "PowerDNS" "Postfix" "Exim" "Dovecot" "SpamAssassin" "Rspamd" "ClamAV" "OpenDKIM" "NGINX" "Apache" "Lighttpd" "Squid" "PHP" "Node.js" "NPM" "Deno" "Bun" "Java" ".NET" "Python" "Perl" "Ruby" "SQLite" "MariaDB" "PostgreSQL" "MongoDB" "Redis" "ProFTPD" "Samba" "OpenSSH" "NTP" "OpenVPN" "rsync" "Borg" "SNMP" "Git" "iptables" "ferm")
+softwareCommands=(
+ "kvm --version | head -n 1 | cut -d' ' -f4"
+ "libvirtd --version | cut -d' ' -f3"
+ "docker --version | sed -n 's/Docker version \([^,]*\),.*/\1/p' | cut -d'+' -f1"
+ "kubectl version --client=true | sed -n 's/Client Version: v\([^ ]*\).*/\1/p'"
+ "named -v | sed -n 's/BIND \([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p'"
+ "pdns_server --version 2>&1 | head -n 1 | sed -n 's/.*\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/p'"
+ "postconf -d | grep 'mail_version =' | cut -f 2 -d \"=\" | cut -f 2 -d \" \""
+ "exim --version | head -n 1 | sed -e 's/Exim version //' -e 's/ .*//'"
+ "dovecot --version | cut -f 1 -d \" \""
+ "spamassassin --version | head -n 1 | cut -d' ' -f3"
+ "rspamd --version | cut -d' ' -f4"
+ "clamscan --version | sed -n 's/ClamAV \([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p'"
+ "opendkim -V 2>&1 | grep -oP '(?<=OpenDKIM Filter v)\S+'"
+ "nginx -v 2>&1 | sed -n 's/^nginx version: nginx\///p'"
+ "apache2 -v | sed -n '1s/^Server version: Apache\/\([^ ]*\).*/\1/p'"
+ "lighttpd -v | sed -n 's/lighttpd\/\([0-9.]*\).*/\1/p'"
+ "squid -v | grep Version | cut -d' ' -f4"
+ "php -v | grep ^PHP | cut -d' ' -f2"
+ "node -v | sed 's/v//'"
+ "npm -v"
+ "deno --version | grep deno | sed -E 's/deno ([^ ]+).*/\1/'"
+ "bun -v"
+ "java --version 2>&1 | sed -n 's/.* \([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p' | head -n 1"
+ "dotnet --list-runtimes | grep Microsoft.NETCore.App | sort -V | tail -n 1 | cut -d' ' -f2"
+ "python --version | sed -n 's/Python //p'"
+ "perl -v | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' | cut -c 2-"
+ "ruby -v | cut -d\" \" -f2"
+ "sqlite3 --version | cut -d' ' -f1"
+ "mysql -V | sed -n 's/^.*Distrib \([0-9.]*\).*/\1/p'"
+ "psql --version | sed -n 's/psql (PostgreSQL) \([^ ]*\).*/\1/p'"
+ "mongod --version | sed -n 's/db version v\([0-9.]*\).*/\1/p'"
+ "redis-server --version | sed -n 's/Redis server v=\([0-9.]*\).*/\1/p'"
+ "proftpd -v | sed -n 's/ProFTPD Version \([^ ]*\)/\1/p'"
+ "smbd --version | sed -n 's/Version \([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p'"
+ "sshd -V 2>&1 | sed -n 's/OpenSSH_\([0-9]*\.[0-9]*\).*/\1/p'"
+ "ntpd --version | sed -n 's/ntpd ntpsec-\([0-9]*\.[0-9]*\.[0-9]*\)/\1/p'"
+ "openvpn --version | head -n 1 | sed -n 's/OpenVPN \([^ ]*\) .*/\1/p'"
+ "rsync --version | head -n 1 | cut -d' ' -f4"
+ "borg -V | cut -d' ' -f2"
+ "snmpd -v | grep \"NET-SNMP version:\" | cut -d' ' -f4"
+ "git --version | cut -d\" \" -f3"
+ "iptables -V | sed -n 's/iptables v\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p'"
+ "ferm -V | sed -n 's/ferm \([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p'"
+)
+
+echo ""
+echo " ${RED}Installed software${DEFAULT}:"
+echo ""
+
+max_length=0
+for index in "${!softwareNames[@]}"; do
+ if which ${softwareNames[$index]} >/dev/null 2>&1; then
+  length=${#formattedSoftwareNames[$index]}
+  if (( length > max_length )); then
+   max_length=$length
+  fi
+ fi
+done
+
+for index in "${!softwareCommands[@]}"; do
+ if which ${softwareNames[$index]} >/dev/null 2>&1; then
+  version=$(bash -c "${softwareCommands[$index]}")
+  formatted_software=$(printf "%${max_length}s" ${formattedSoftwareNames[$index]})
+  echo " ${YELLOW}${formatted_software}${DEFAULT}: $version"
+ fi
+done
+
+echo ""
