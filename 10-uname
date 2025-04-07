@@ -86,7 +86,8 @@ echo " ${RED}Storage usage${DEFAULT}:"
 echo ""
 
 max_disk_length=0
-disks=$(lsblk -np -o NAME,MOUNTPOINT | grep -E ' /' | sed -e 's/[^/]*\//\//' -e 's/ .*//')
+#disks=$(lsblk -np -o NAME,MOUNTPOINT | grep -E ' /' | sed -e 's/[^/]*\//\//' -e 's/ .*//')
+disks=$(df -P | awk '/^\/dev\// {print $1}' | sort -u)
 for disk in $disks; do
  disk_length=${#disk}
  if (( disk_length > max_disk_length )); then
